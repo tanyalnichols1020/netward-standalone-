@@ -127,6 +127,51 @@ def test_fire_mirror_returns_status_headers_and_body():
     assert rendered["body"].startswith("ok ")
 
 
+def test_header_template_placeholder_is_rendered():
+    """X1: header values with {{...}} placeholders must be rendered, not emitted literally."""
+    response = _response("body", {"req_id": "uuid"})
+    response["headers"] = {"Content-Type": "text/plain", "X-Request-Id": "{{req_id}}"}
+    rendered = fire_mirror(_probe(), response)
+    assert "{{req_id}}" not in rendered["headers"]["X-Request-Id"], (
+        "header placeholder was not substituted"
+    )
+    assert len(rendered["headers"]["X-Request-Id"]) > 0
+
+
+def test_header_and_body_share_rendered_var_values():
+    """X1: the same generated value for a var appears in both header and body."""
+    response = _response("id={{req_id}}", {"req_id": "uuid"})
+    response["headers"] = {"X-Req": "{{req_id}}"}
+    rendered = fire_mirror(_probe(), response)
+    body_id = rendered["body"].split("=", 1)[1]
+    assert rendered["headers"]["X-Req"] == body_id
+
+
+def test_location_header_placeholder_renders_to_real_path():
+    """X1: Location: {{honeypot_path}} → a real redirect path, not the literal."""
+    response = _response("redirecting", {"honeypot_path": "fake_redirect"})
+    response["http_status"] = 302
+    response["headers"] = {"Location": "{{honeypot_path}}"}
+    rendered = fire_mirror(_probe(), response)
+    assert "{{honeypot_path}}" not in rendered["headers"]["Location"]
+    assert rendered["headers"]["Location"].startswith("/")
+
+
+def test_server_header_defaults_to_nginx_when_absent():
+    """X2: mirrors without an explicit Server header get Server: nginx injected."""
+    response = _response("ok", {})
+    rendered = fire_mirror(_probe(), response)
+    assert rendered["headers"].get("Server") == "nginx"
+
+
+def test_explicit_server_header_is_preserved():
+    """X2: mirrors with an explicit Server header keep their value unchanged."""
+    response = _response("ok", {})
+    response["headers"] = {"Content-Type": "text/plain", "Server": "Apache/2.4.51"}
+    rendered = fire_mirror(_probe(), response)
+    assert rendered["headers"]["Server"] == "Apache/2.4.51"
+
+
 def test_hostile_payload_is_rejected():
     response = _response("<script>alert(1)</script>", {})
 

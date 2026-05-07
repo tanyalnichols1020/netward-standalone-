@@ -1,5 +1,5 @@
 """
-End-to-end integration test for Net Ward v0.1 bones.
+End-to-end integration test for the Net Ward standalone proxy.
 
 Spins up:
 1. A mock upstream service (aiohttp web.Application returning "from upstream")
@@ -13,7 +13,7 @@ the full data flow works end-to-end:
 Coverage:
 - Legit request → upstream sees it, returns "from upstream"
 - Probe-matching request → mirror fires, upstream is NOT hit
-- Flood (30+ rapid requests) → flood classification, mirror fires
+- Flood (1000+ rapid requests from same source in 10s) → flood state; probe-shaped paths mirror, non-probe paths pass through
 - Storage records probes with the right classifications
 - Source reputation flips after enough probes accumulate
 
@@ -32,6 +32,7 @@ from aiohttp import web
 
 from netward.bootstrap import install_vendor_patterns
 from netward.capture import _make_handler
+from netward.classify import FLOOD_THRESHOLD
 from netward.schema import Pattern
 from netward.storage import Storage
 
@@ -183,8 +184,9 @@ def test_probe_pattern_fires_mirror_and_blocks_upstream(storage):
     storage.patterns_upsert(_make_pattern(r"^/wp-admin"))
     out = asyncio.run(_run_scenario(storage, ["/wp-admin"]))
     status, body = out["results"][0]
-    # Mirror returns 200 with the default minimal JSON body — never reaches upstream
-    assert status == 200
+    # Default mirror variant — status is one of {200, 429, 503} depending on
+    # (source_id, path) hash. Any is correct; "from upstream" must not appear.
+    assert status in {200, 429, 503}
     assert "from upstream" not in body
     assert out["upstream_served"] == [], "upstream must NOT see probe traffic"
 
@@ -214,8 +216,9 @@ def test_probes_are_persisted_to_storage(storage):
 
 
 def test_flood_burst_classifies_as_flood(storage):
-    # 35 rapid requests from same source within ~1s should flip to flood
-    paths = ["/api/random"] * 35
+    # Send FLOOD_THRESHOLD + 1 requests so the window crosses the threshold
+    # regardless of future threshold changes.
+    paths = ["/api/random"] * (FLOOD_THRESHOLD + 1)
     asyncio.run(_run_scenario(storage, paths))
     rows = storage._conn.execute(
         "SELECT classification, COUNT(*) AS c FROM probes GROUP BY classification"
@@ -318,6 +321,19 @@ def test_vendor_seed_shell_uploader_returns_fake_404(storage):
     assert out["upstream_served"] == []
 
 
+@pytest.mark.parametrize(("probe_path", "expected_status"), [
+    ("/admin", 200),
+    ("/WP-ADMIN/", 200),
+    ("/PHPMYADMIN/", 200),
+])
+def test_vendor_seed_path_variants_fire_expected_mirrors(storage, probe_path, expected_status):
+    out = asyncio.run(_run_vendor_scenario(storage, [{"path": probe_path}]))
+    status, body = out["results"][0]
+    assert status == expected_status
+    assert "from upstream" not in body
+    assert out["upstream_served"] == []
+
+
 def test_vendor_seed_scanner_ua_redirects_to_honeypot(storage):
     """GET / with sqlmap UA → 302 redirect to a honeypot path.
     follow=False because the UA header travels with redirects, retriggering
@@ -335,10 +351,30 @@ def test_vendor_seed_scanner_ua_redirects_to_honeypot(storage):
     )
 
 
+def test_vendor_seed_scanner_ua_ignores_non_user_agent_headers(storage):
+    out = asyncio.run(_run_vendor_scenario(storage, [{
+        "path": "/",
+        "headers": {
+            "User-Agent": "Mozilla/5.0",
+            "Referer": "https://scanner.test/?tool=sqlmap",
+        },
+    }]))
+    status, body = out["results"][0]
+    assert status == 200
+    assert body == "from upstream"
+    assert out["upstream_served"] == ["/"]
+
+
 def test_vendor_seed_basic_auth_probe_fires_fake_realm(storage):
-    """Authorization: Basic <creds> → basic_auth_fake_realm mirror.
-    Verifies the value-shaped (not full-line-shaped) regex matches header
-    values correctly AND the 401-with-realm mirror design fires end-to-end."""
+    """basic_auth_probe ships disabled by default. This test explicitly enables it
+    (simulating an operator opt-in) then verifies the regex + mirror fire correctly
+    end-to-end: Authorization header matched, 401 returned, upstream not hit."""
+    # Seed vendor patterns then enable basic_auth_probe; _run_vendor_scenario's
+    # internal install_vendor_patterns call is idempotent and preserves this state.
+    install_vendor_patterns(storage)
+    storage._conn.execute(
+        "UPDATE patterns SET expires_at = NULL WHERE id = ?", ("basic_auth_probe",)
+    )
     out = asyncio.run(_run_vendor_scenario(storage, [{
         "path": "/api/admin",
         "headers": {"Authorization": "Basic dXNlcjpwYXNzd29yZA=="},
@@ -357,6 +393,20 @@ def test_vendor_seed_basic_auth_probe_fires_fake_realm(storage):
     )
 
 
+def test_vendor_seed_basic_auth_probe_ignores_unusual_header_names(storage):
+    out = asyncio.run(_run_vendor_scenario(storage, [{
+        "path": "/api/admin",
+        "headers": {
+            "User-Agent": "Mozilla/5.0",
+            "X-Debug-Authorization": "Basic dXNlcjpwYXNzd29yZA==",
+        },
+    }]))
+    status, body = out["results"][0]
+    assert status == 200
+    assert body == "from upstream"
+    assert out["upstream_served"] == ["/api/admin"]
+
+
 def test_vendor_seed_legit_request_still_passes_through(storage):
     """Real browser UA + non-suspicious path → upstream sees it normally."""
     out = asyncio.run(_run_vendor_scenario(storage, [{
@@ -373,10 +423,59 @@ def test_vendor_seed_legit_request_still_passes_through(storage):
 
 def test_vendor_seed_persists_patterns_in_storage(storage):
     """Sanity: bootstrap actually wrote rows. Without this, every other vendor
-    test would be passing because of fallthrough behavior."""
-    install_vendor_patterns(storage)
+    test would be passing because of fallthrough behavior.
+    basic_auth_probe ships with expires_at=1 (disabled by default), so the
+    active count is one less than the total seeded count."""
+    pats, _mirrors = install_vendor_patterns(storage)
+    assert pats >= 11, f"expected 11+ vendor patterns seeded, got {pats}"
     active = storage.patterns_active()
     vendor_count = sum(1 for p in active if p["origin"] == "vendor")
-    assert vendor_count >= 11, (
-        f"expected 11+ vendor patterns after seed, got {vendor_count}"
+    assert vendor_count >= 10, (
+        f"expected 10+ active vendor patterns after seed, got {vendor_count}"
     )
+
+
+# =============================================================================
+# B1 flood gate redesign — pass-through bypass
+# =============================================================================
+
+
+def test_flood_source_on_pass_through_path_reaches_upstream(storage):
+    """Core B1 test: a source that has hit the flood threshold must still reach
+    the upstream when it requests a non-probe-shaped path.
+
+    This is the scenario that failed in Oracle's loadgen run (v0.4): 5,999 of
+    6,000 requests to / returned the default mirror instead of upstream content.
+    """
+    storage.patterns_upsert(_make_pattern(r"^/probe-target"))
+
+    # Fire 1001 probe-target requests to trip the flood gate, then one clean path
+    paths = ["/probe-target"] * 1001 + ["/api/health"]
+    out = asyncio.run(_run_scenario(storage, paths))
+
+    # The probe-target hits should be mirrored
+    for status, body in out["results"][:1001]:
+        assert "from upstream" not in body
+
+    # The clean path request after flood state must still reach upstream
+    final_status, final_body = out["results"][-1]
+    assert final_status == 200
+    assert final_body == "from upstream", (
+        "flood gate blocked a non-probe path — B1 pass-through bypass failed"
+    )
+    assert "/api/health" in out["upstream_served"], (
+        "flood gate suppressed upstream delivery for a non-probe path"
+    )
+
+
+def test_flood_source_on_probe_path_still_gets_mirrored(storage):
+    """Flood sources hitting probe-shaped paths still receive mirror responses."""
+    storage.patterns_upsert(_make_pattern(r"^/probe-target"))
+    paths = ["/probe-target"] * 1002
+    out = asyncio.run(_run_scenario(storage, paths))
+
+    # After flood state trips, probe-target hits still get mirrored
+    for status, body in out["results"]:
+        assert "from upstream" not in body, (
+            "probe-shaped path from flood source leaked to upstream"
+        )

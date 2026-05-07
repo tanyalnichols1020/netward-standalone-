@@ -106,7 +106,7 @@ def test_every_pattern_signature_compiles(patterns):
 
 
 def test_every_pattern_kind_supported(patterns):
-    """v0.1 supports path + header. Other kinds will silently never fire."""
+    """The standalone classifier supports path + header patterns."""
     supported = {"path", "header"}
     for p in patterns:
         assert p["kind"] in supported, (
@@ -131,6 +131,15 @@ def test_every_pattern_confidence_in_range(patterns):
     for p in patterns:
         c = p["confidence"]
         assert 0.0 <= c <= 1.0, f"pattern {p['id']!r} confidence={c} out of range"
+
+
+def test_header_patterns_declare_target_header(patterns):
+    for p in patterns:
+        if p["kind"] != "header":
+            continue
+        assert p.get("header_name"), (
+            f"header pattern {p['id']!r} must declare header_name for scoped matching"
+        )
 
 
 # ----- mirror integrity -----
@@ -224,6 +233,7 @@ def test_every_mirror_referenced_by_at_least_one_pattern(patterns, mirrors):
     "/",
     "/index.html",
     "/api/users",
+    "/admin-console",
     "/login",  # generic login MUST NOT match scanner UA pattern (which is header-kind)
     "/static/js/app.js",
     "/healthz",
@@ -247,6 +257,25 @@ def test_path_patterns_do_not_match_legit_traffic(patterns, legit_path):
             )
 
 
+@pytest.mark.parametrize(("pattern_id", "probe_path"), [
+    ("generic_admin_login_probe", "/admin"),
+    ("generic_admin_login_probe", "/admin/"),
+    ("wordpress_admin_probe", "/WP-ADMIN/"),
+    ("phpmyadmin_probe", "/PHPMYADMIN/"),
+    ("shell_uploader_probe", "/by.php"),
+    ("env_file_probe", "/.envrc"),
+    ("env_file_probe", "/config/settings/.env_backup"),
+    ("env_file_probe", "/app/releases/current/.env_local"),
+])
+def test_vendor_path_patterns_cover_expected_probe_variants(patterns, pattern_id, probe_path):
+    pattern = next(p for p in patterns if p["id"] == pattern_id)
+    normalized = probe_path.lower().rstrip("/") or "/"
+    regex = re.compile(pattern["signature"])
+    assert regex.search(normalized), (
+        f"pattern {pattern_id!r} did not match expected probe path {probe_path!r}"
+    )
+
+
 @pytest.mark.parametrize("legit_ua", [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
@@ -266,3 +295,24 @@ def test_header_patterns_do_not_match_legit_user_agents(patterns, legit_ua):
                 f"pattern {p['id']!r} (signature={p['signature']!r}) "
                 f"falsely matches legit UA {legit_ua!r}"
             )
+
+
+@pytest.mark.parametrize("probe_ua", [
+    "feroxbuster/2.11",
+    "ffuf/2.1.0",
+    "dirb/2.22",
+    "BurpSuite Professional",
+    "metasploit/6.4",
+    "ZAP/2.15.0",
+])
+def test_scanner_ua_pattern_matches_expanded_tooling(patterns, probe_ua):
+    pattern = next(p for p in patterns if p["id"] == "scanner_ua_probe")
+    regex = re.compile(pattern["signature"])
+    assert regex.search(probe_ua), f"scanner_ua_probe missed {probe_ua!r}"
+
+
+def test_basic_auth_probe_does_not_match_unrelated_header_value(patterns):
+    pattern = next(p for p in patterns if p["id"] == "basic_auth_probe")
+    regex = re.compile(pattern["signature"])
+    unrelated_header_value = "https://example.test/?token=Basic+dXNlcjpwYXNzd29yZA=="
+    assert not regex.search(unrelated_header_value)

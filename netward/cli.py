@@ -17,6 +17,7 @@ import time
 
 from netward.storage import Storage
 from netward import bootstrap as _bootstrap
+from netward.regex_policy import PatternPolicyError
 
 
 def _open_storage(args) -> Storage:
@@ -34,6 +35,9 @@ def _cmd_install_patterns(args) -> None:
     except _bootstrap.BootstrapError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
+    except PatternPolicyError as exc:
+        print(f"Error: pattern rejected by regex policy guard: {exc}", file=sys.stderr)
+        sys.exit(2)
     finally:
         storage.close()
 

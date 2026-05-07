@@ -39,8 +39,14 @@ def _probe(path: str = "/", headers: dict | None = None) -> Probe:
     }
 
 
-def _pattern(kind: str, sig: str, origin: str = "vendor", mr_id: str | None = None) -> Pattern:
-    return {
+def _pattern(
+    kind: str,
+    sig: str,
+    origin: str = "vendor",
+    mr_id: str | None = None,
+    **extra: object,
+) -> Pattern:
+    pattern: Pattern = {
         "id": f"pat-{kind}",
         "kind": kind,
         "signature": sig,
@@ -53,6 +59,8 @@ def _pattern(kind: str, sig: str, origin: str = "vendor", mr_id: str | None = No
         "mirror_response_id": mr_id,
         "mutation_generation": 0,
     }
+    pattern.update(extra)
+    return pattern
 
 
 def _source(reputation: str = "neutral", probe_count: int = 0) -> Source:
@@ -68,8 +76,8 @@ def _source(reputation: str = "neutral", probe_count: int = 0) -> Source:
     }
 
 
-def _flood_window(n: int = 30) -> list[float]:
-    """n timestamps within the last 0.5 seconds."""
+def _flood_window(n: int = 1000) -> list[float]:
+    """n timestamps within the last 0.5 seconds (well within FLOOD_WINDOW_SECS=10.0)."""
     now = time.time()
     return [now - 0.1] * n
 
@@ -90,15 +98,68 @@ class TestClassify:
 
     def test_header_pattern_match_fires_mirror(self):
         probe = _probe("/", headers={"User-Agent": "masscan/1.3", "Host": "example.com"})
-        patterns = [_pattern("header", r"masscan")]
+        patterns = [_pattern("header", r"masscan", header_name="User-Agent")]
         result = mod.classify(probe, {"patterns": patterns, "source": _source()})
         assert result["fire_mirror"] is True
         assert result["probe"]["classification"] == "probe"
 
-    def test_flood_fires_mirror(self):
+    def test_path_matching_normalizes_case_and_trailing_slash(self):
+        patterns = [_pattern("path", r"^/wp-admin/?$")]
+        for path in ("/wp-admin", "/WP-ADMIN/", "/wp-admin///"):
+            result = mod.classify(_probe(path), {"patterns": patterns, "source": _source()})
+            assert result["fire_mirror"] is True, path
+
+    def test_header_pattern_only_checks_intended_header_field(self):
+        probe = _probe(
+            "/",
+            headers={"X-Debug-Auth": "Basic dXNlcjpwYXNzd29yZA==", "User-Agent": "Mozilla/5.0"},
+        )
+        patterns = [_pattern("header", r"^Basic\s+[A-Za-z0-9+/=]{8,}$", header_name="Authorization")]
+        result = mod.classify(probe, {"patterns": patterns, "source": _source()})
+        assert result["fire_mirror"] is False
+        assert result["probe"]["classification"] == "unknown"
+
+    def test_vendor_header_pattern_fallback_scopes_basic_auth_to_authorization(self):
+        probe = _probe(
+            "/",
+            headers={"X-Forwarded-Authorization": "Basic dXNlcjpwYXNzd29yZA=="},
+        )
+        patterns = [{
+            **_pattern("header", r"^Basic\s+[A-Za-z0-9+/=]{8,}$"),
+            "id": "basic_auth_probe",
+        }]
+        result = mod.classify(probe, {"patterns": patterns, "source": _source()})
+        assert result["fire_mirror"] is False
+        assert result["probe"]["classification"] == "unknown"
+
+    def test_vendor_header_pattern_fallback_scopes_scanner_to_user_agent(self):
+        probe = _probe(
+            "/",
+            headers={"Referer": "https://example.test/?via=sqlmap", "User-Agent": "Mozilla/5.0"},
+        )
+        patterns = [{**_pattern("header", r"sqlmap"), "id": "scanner_ua_probe"}]
+        result = mod.classify(probe, {"patterns": patterns, "source": _source()})
+        assert result["fire_mirror"] is False
+        assert result["probe"]["classification"] == "unknown"
+
+    def test_flood_without_pattern_match_passes_through(self):
+        # B1 core fix: flood state alone does not fire a mirror. The source's
+        # unmatched traffic must still reach upstream.
         result = mod.classify(
-            _probe("/"),
-            {"patterns": [], "source": _source(), "rate_window": _flood_window(30)},
+            _probe("/api/health"),
+            {"patterns": [], "source": _source(), "rate_window": _flood_window(1000)},
+        )
+        assert result["fire_mirror"] is False
+        assert result["probe"]["classification"] == "flood"
+        assert result["probe"]["upstream_passed"] is True
+
+    def test_flood_with_pattern_match_fires_mirror(self):
+        # Flood source hitting a probe-shaped path still gets mirrored.
+        probe = _probe("/wp-admin/")
+        patterns = [_pattern("path", r"^/wp-admin\b")]
+        result = mod.classify(
+            probe,
+            {"patterns": patterns, "source": _source(), "rate_window": _flood_window(1000)},
         )
         assert result["fire_mirror"] is True
         assert result["probe"]["classification"] == "flood"
@@ -106,7 +167,7 @@ class TestClassify:
     def test_flood_below_threshold_does_not_trigger(self):
         result = mod.classify(
             _probe("/"),
-            {"patterns": [], "source": _source(), "rate_window": _flood_window(29)},
+            {"patterns": [], "source": _source(), "rate_window": _flood_window(999)},
         )
         assert result["fire_mirror"] is False
         assert result["probe"]["classification"] == "unknown"
@@ -119,11 +180,23 @@ class TestClassify:
         assert result["probe"]["classification"] == "unknown"
         assert result["probe"]["upstream_passed"] is True
 
-    def test_known_bad_source_fires_mirror_skips_patterns(self):
-        # No patterns needed -- known_bad bypasses pattern scan entirely
+    def test_known_bad_source_without_pattern_match_passes_through(self):
+        # B1: known_bad no longer short-circuits to mirror. Unmatched paths
+        # from known_bad sources still reach upstream.
         result = mod.classify(
             _probe("/perfectly/normal/path"),
             {"patterns": [], "source": _source(reputation="known_bad")},
+        )
+        assert result["fire_mirror"] is False
+        assert result["probe"]["upstream_passed"] is True
+
+    def test_known_bad_source_with_pattern_match_fires_mirror(self):
+        # known_bad source hitting a probe-shaped path is still mirrored.
+        probe = _probe("/wp-admin/")
+        patterns = [_pattern("path", r"^/wp-admin\b")]
+        result = mod.classify(
+            probe,
+            {"patterns": patterns, "source": _source(reputation="known_bad")},
         )
         assert result["fire_mirror"] is True
         assert result["probe"]["classification"] == "probe"

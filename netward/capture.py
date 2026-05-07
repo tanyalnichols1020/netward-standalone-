@@ -32,12 +32,13 @@ from netward import mirror as _mirror_mod
 # Body capture cap per schema (RequestMetadata.body_snippet)
 _BODY_SNIPPET_MAX = 4096
 
-# Must stay in sync with classify.FLOOD_WINDOW_SECS (both are 1.0 s)
-_RATE_WINDOW_SECS: float = 1.0
+# Must stay in sync with classify.FLOOD_WINDOW_SECS (both are 10.0 s, v0.4.1)
+_RATE_WINDOW_SECS: float = 10.0
 
 # Per-source rate windows (source_id -> bounded deque of request timestamps).
-# Dict is capped at _RATE_WINDOW_MAX_SOURCES; oldest quarter evicted when full
-# so the dict never grows unboundedly on high-source-diversity deployments.
+# maxlen=2000: headroom above the 1000-hit flood threshold to avoid evicting
+# in-window timestamps before they age out naturally.
+# Dict is capped at _RATE_WINDOW_MAX_SOURCES; oldest quarter evicted when full.
 _RATE_WINDOW_MAX_SOURCES = 10_000
 _rate_windows: dict[str, deque] = {}
 
@@ -48,7 +49,7 @@ def _get_rate_window(source_id: str) -> deque:
             evict_n = _RATE_WINDOW_MAX_SOURCES // 4
             for k in list(_rate_windows.keys())[:evict_n]:
                 del _rate_windows[k]
-        _rate_windows[source_id] = deque(maxlen=500)
+        _rate_windows[source_id] = deque(maxlen=2000)
     return _rate_windows[source_id]
 
 # Hop-by-hop headers stripped before forwarding upstream
@@ -59,6 +60,10 @@ _HOP_BY_HOP = frozenset({
 
 _PATTERN_CACHE_TTL = 30.0
 
+# Default mirror variant set (v0.4.1 fingerprint hardening).
+# A single fixed JSON shape was detectable under load (stress-state signature).
+# Variant selection is deterministic per (source_id, path) so a given source
+# sees a consistent shape per path — prevents second-probe shape divergence.
 _DEFAULT_MIRROR: dict = {
     "id": "_netward_default",
     "matches_pattern_id": "",
@@ -67,9 +72,73 @@ _DEFAULT_MIRROR: dict = {
     "headers": {"Content-Type": "application/json"},
     "body_template": '{"status":"ok","id":"{{uuid}}","timestamp":"{{timestamp}}"}',
     "body_template_vars": {"uuid": "uuid", "timestamp": "timestamp"},
-    "description": "Default minimal mirror (no specific response installed for this pattern)",
+    "description": "Default minimal mirror (fallback; prefer _select_default_mirror)",
     "created_at": 0.0,
 }
+
+_DEFAULT_MIRROR_VARIANTS: list[dict] = [
+    {
+        "id": "_netward_default_0",
+        "matches_pattern_id": "",
+        "intensity": "minimal",
+        "http_status": 200,
+        "headers": {"Content-Type": "application/json"},
+        "body_template": '{"status":"ok","id":"{{uuid}}","timestamp":"{{timestamp}}"}',
+        "body_template_vars": {"uuid": "uuid", "timestamp": "timestamp"},
+        "description": "Default variant 0 — JSON ok",
+        "created_at": 0.0,
+    },
+    {
+        "id": "_netward_default_1",
+        "matches_pattern_id": "",
+        "intensity": "minimal",
+        "http_status": 429,
+        "headers": {"Content-Type": "application/json", "Retry-After": "30"},
+        "body_template": '{"error":"rate limited","retry_after":30}',
+        "body_template_vars": {},
+        "description": "Default variant 1 — rate limited JSON",
+        "created_at": 0.0,
+    },
+    {
+        "id": "_netward_default_2",
+        "matches_pattern_id": "",
+        "intensity": "minimal",
+        "http_status": 503,
+        "headers": {"Content-Type": "text/html; charset=utf-8"},
+        "body_template": "<html><body><h1>Service Unavailable</h1><p>Try again later.</p></body></html>",
+        "body_template_vars": {},
+        "description": "Default variant 2 — HTML 503",
+        "created_at": 0.0,
+    },
+    {
+        "id": "_netward_default_3",
+        "matches_pattern_id": "",
+        "intensity": "minimal",
+        "http_status": 200,
+        "headers": {"Content-Type": "application/json"},
+        "body_template": '{"data":null,"next":null}',
+        "body_template_vars": {},
+        "description": "Default variant 3 — empty result JSON",
+        "created_at": 0.0,
+    },
+    {
+        "id": "_netward_default_4",
+        "matches_pattern_id": "",
+        "intensity": "minimal",
+        "http_status": 200,
+        "headers": {"Content-Type": "text/plain; charset=utf-8"},
+        "body_template": "OK",
+        "body_template_vars": {},
+        "description": "Default variant 4 — plain OK",
+        "created_at": 0.0,
+    },
+]
+
+
+def _select_default_mirror(source_id: str, path: str) -> dict:
+    """Deterministic variant per (source_id, path) to prevent shape divergence."""
+    idx = abs(hash(source_id + path)) % len(_DEFAULT_MIRROR_VARIANTS)
+    return _DEFAULT_MIRROR_VARIANTS[idx]
 
 
 async def _read_body_snippet(request: web.Request) -> Optional[str]:
@@ -110,8 +179,8 @@ async def _forward_upstream(
     request: web.Request,
     upstream: str,
     session: aiohttp.ClientSession,
-) -> web.Response:
-    """Forward to upstream. Fail-open: any exception returns 502."""
+) -> Optional[web.Response]:
+    """Forward to upstream. Return None when upstream is unavailable."""
     url = upstream.rstrip("/") + request.path
     if request.query_string:
         url += "?" + request.query_string
@@ -135,7 +204,16 @@ async def _forward_upstream(
             }
             return web.Response(status=resp.status, headers=resp_headers, body=content)
     except Exception:
-        return web.Response(status=502, text="upstream unavailable")
+        return None
+
+
+def _mirror_response_from_probe(probe: Probe, mirror: dict) -> web.Response:
+    http_resp = _mirror_mod.fire_mirror(probe, mirror)
+    return web.Response(
+        status=http_resp["status"],
+        headers=http_resp["headers"],
+        text=http_resp["body"],
+    )
 
 
 def _fire_and_forget(storage, probe: Probe) -> None:
@@ -199,15 +277,27 @@ def _make_handler(config: OperatorConfig, storage, session: aiohttp.ClientSessio
             )
         except Exception:
             probe["classification"] = "unknown"
-            probe["upstream_passed"] = True
+            upstream_response = await _forward_upstream(request, upstream, session)
+            if upstream_response is None:
+                probe["mirror_fired"] = True
+                probe["upstream_passed"] = False
+                response = _mirror_response_from_probe(
+                    probe, _select_default_mirror(source_id, request.path)
+                )
+            else:
+                probe["upstream_passed"] = True
+                response = upstream_response
             _fire_and_forget(storage, probe)
-            return await _forward_upstream(request, upstream, session)
+            return response
 
         updated = result["probe"]
         classification = updated.get("classification", "unknown")
 
-        # Source counters + reputation
-        if classification in ("probe", "flood"):
+        # Source counters + reputation.
+        # Key on fire_mirror, not classification: a "flood"-classified request
+        # that didn't match a pattern still passes to upstream — that's legit
+        # traffic, not a probe. Only mirror-firing events are probe_count.
+        if result["fire_mirror"]:
             source["probe_count"] = source.get("probe_count", 0) + 1
         else:
             source["legit_count"] = source.get("legit_count", 0) + 1
@@ -219,23 +309,32 @@ def _make_handler(config: OperatorConfig, storage, session: aiohttp.ClientSessio
             pass  # fail-open: stale source state is acceptable
 
         # Route
+        _default_mr = _select_default_mirror(source_id, request.path)
         if result["fire_mirror"]:
             mr_id = result.get("mirror_response_id")
-            mr = (storage.mirror_response_lookup(mr_id) if mr_id else None) or _DEFAULT_MIRROR
+            mr = (storage.mirror_response_lookup(mr_id) if mr_id else None) or _default_mr
             try:
-                http_resp = _mirror_mod.fire_mirror(updated, mr)
-                response = web.Response(
-                    status=http_resp["status"],
-                    headers=http_resp["headers"],
-                    text=http_resp["body"],
-                )
+                response = _mirror_response_from_probe(updated, mr)
             except Exception:
                 # Mirror failed -- fail-open, pass upstream
-                updated["mirror_fired"] = False
-                updated["upstream_passed"] = True
-                response = await _forward_upstream(request, upstream, session)
+                upstream_response = await _forward_upstream(request, upstream, session)
+                if upstream_response is None:
+                    updated["mirror_fired"] = True
+                    updated["upstream_passed"] = False
+                    response = _mirror_response_from_probe(updated, _default_mr)
+                else:
+                    updated["mirror_fired"] = False
+                    updated["upstream_passed"] = True
+                    response = upstream_response
         else:
-            response = await _forward_upstream(request, upstream, session)
+            upstream_response = await _forward_upstream(request, upstream, session)
+            if upstream_response is None:
+                updated["mirror_fired"] = True
+                updated["upstream_passed"] = False
+                response = _mirror_response_from_probe(updated, _default_mr)
+            else:
+                updated["upstream_passed"] = True
+                response = upstream_response
 
         _fire_and_forget(storage, updated)
         return response

@@ -83,7 +83,7 @@ C. Federated hub: regional hubs that nodes connect to, hubs gossip
 Recommend a security review document is drafted BEFORE this module is
 implemented. The schema doesn't lock the architecture choice.
 
-DISTRIBUTED DECEPTION CONTINUATION (deferred to v0.1+):
+DISTRIBUTED DECEPTION CONTINUATION (deferred to a later release):
 
 Future feature where mirror responses across nodes JOINTLY maintain an
 illusion. Example: A returns fake session token `ABC123`; A publishes
@@ -94,7 +94,8 @@ thinking they have a foothold across multiple sites.
 Schema-wise this would add `MeshIntel.kind = "deception_continuation"`
 plus `MirrorResponse.continuation_id`. Worth noting here so a future
 security review can address it: joint illusion is a stronger deception
-but a bigger attack surface if the mesh is compromised. v0.1+, not v0.
+but a bigger attack surface if the mesh is compromised. This stays out of
+the v0.4.1 standalone release.
 
 For v0 schema, the existing MeshIntel kinds (new_pattern /
 pattern_confirmation / attack_mutation / attack_sustained /

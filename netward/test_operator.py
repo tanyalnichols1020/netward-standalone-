@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import shutil
 import time
+import uuid
+from pathlib import Path
 
 import pytest
 
@@ -10,8 +13,12 @@ from netward.operator_layer import (
     dedupe_alert,
     deliver_alert,
     load_config,
+    validate_storage_permissions,
 )
 from netward.schema import OperatorAlert, OperatorConfig
+
+
+_WORKSPACE_TMP_ROOT = Path(__file__).resolve().parent.parent / ".codex-test-operator"
 
 
 def _config(**overrides) -> OperatorConfig:
@@ -48,6 +55,12 @@ def _alert(**overrides) -> OperatorAlert:
     }
     alert.update(overrides)
     return alert
+
+
+def _workspace_tempdir() -> Path:
+    path = _WORKSPACE_TMP_ROOT / str(uuid.uuid4())
+    path.mkdir(parents=True, exist_ok=False)
+    return path
 
 
 def test_load_config_reads_valid_json(tmp_path):
@@ -100,6 +113,109 @@ def test_load_config_rejects_unknown_alert_channel(tmp_path):
         load_config(str(path))
 
 
+def test_validate_storage_permissions_rejects_world_writable_db(monkeypatch):
+    tmpdir = _workspace_tempdir()
+    try:
+        db_path = tmpdir / "netward.db"
+        db_path.write_text("", encoding="utf-8")
+        monkeypatch.setattr("netward.operator_layer._is_world_writable", lambda path: True)
+
+        with pytest.raises(ValidationError, match="world-writable"):
+            validate_storage_permissions(
+                _config(storage_path=str(db_path)),
+                platform_name="linux",
+            )
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_validate_storage_permissions_allows_override_for_world_writable_db(
+    capsys,
+    monkeypatch,
+):
+    tmpdir = _workspace_tempdir()
+    try:
+        db_path = tmpdir / "netward.db"
+        db_path.write_text("", encoding="utf-8")
+        monkeypatch.setattr("netward.operator_layer._is_world_writable", lambda path: True)
+
+        validate_storage_permissions(
+            _config(storage_path=str(db_path)),
+            allow_permissive_db=True,
+            platform_name="linux",
+        )
+
+        captured = capsys.readouterr()
+        assert "ERROR:" in captured.err
+        assert "--allow-permissive-db" in captured.err
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_validate_storage_permissions_missing_db_checks_parent_dir(monkeypatch):
+    tmpdir = _workspace_tempdir()
+    try:
+        db_path = tmpdir / "state" / "netward.db"
+        db_path.parent.mkdir()
+        seen: list[str] = []
+
+        def fake_is_world_writable(path):
+            seen.append(str(path))
+            return False
+
+        monkeypatch.setattr("netward.operator_layer._is_world_writable", fake_is_world_writable)
+
+        validate_storage_permissions(
+            _config(storage_path=str(db_path)),
+            platform_name="linux",
+        )
+
+        assert seen == [str(db_path.parent)]
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_validate_storage_permissions_clean_posix_path_passes(capsys, monkeypatch):
+    tmpdir = _workspace_tempdir()
+    try:
+        db_path = tmpdir / "netward.db"
+        db_path.write_text("", encoding="utf-8")
+        monkeypatch.setattr("netward.operator_layer._is_world_writable", lambda path: False)
+
+        validate_storage_permissions(
+            _config(storage_path=str(db_path)),
+            platform_name="darwin",
+        )
+
+        captured = capsys.readouterr()
+        assert captured.err == ""
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_validate_storage_permissions_windows_logs_skip(capsys, monkeypatch):
+    tmpdir = _workspace_tempdir()
+    try:
+        db_path = tmpdir / "netward.db"
+        db_path.write_text("", encoding="utf-8")
+
+        def should_not_run(path):
+            raise AssertionError("world-writable check should be skipped on Windows")
+
+        monkeypatch.setattr("netward.operator_layer._is_world_writable", should_not_run)
+
+        validate_storage_permissions(
+            _config(storage_path=str(db_path)),
+            platform_name="win32",
+        )
+
+        captured = capsys.readouterr()
+        assert "INFO:" in captured.err
+        assert "avoid shared-write locations" in captured.err
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 def test_deliver_alert_logs_to_stdout(capsys):
     delivered = deliver_alert(_alert(), _config())
 
@@ -118,7 +234,7 @@ def test_deliver_alert_treats_empty_channels_as_stdout(raw_channels, capsys):
 
 
 def test_configured_external_alert_channel_is_deferred():
-    with pytest.raises(NotImplementedError, match="deferred to v0.2"):
+    with pytest.raises(NotImplementedError, match="deferred to a later release"):
         deliver_alert(_alert(), _config(alert_channels=["slack"]))
 
 

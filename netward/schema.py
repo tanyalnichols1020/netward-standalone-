@@ -23,7 +23,7 @@ from __future__ import annotations
 from typing import Literal, Optional, TypedDict
 
 
-SCHEMA_VERSION = 1  # bumped from 0 when v0.1 implementation began
+SCHEMA_VERSION = 1  # base standalone schema version
 
 
 # =============================================================================
@@ -119,6 +119,9 @@ class Pattern(TypedDict, total=False):
     expires_at: Optional[float]          # unix epoch; mesh-derived patterns
                                           # default to created_at + INTEL_DEFAULT_TTL_SECS,
                                           # operator/vendor patterns leave None
+    header_name: Optional[str]           # for header-kind patterns: restrict match to this
+                                          # specific header (e.g. "User-Agent", "Authorization").
+                                          # When absent, all header values are scanned (legacy).
 
 
 # =============================================================================

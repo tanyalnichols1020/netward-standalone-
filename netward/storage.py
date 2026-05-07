@@ -1,5 +1,5 @@
 """
-Net Ward — Storage Layer (sqlite3 backend, v0.1 bones)
+Net Ward — Storage Layer (sqlite3 backend for the standalone build)
 
 Single-file sqlite database, stdlib-only. Thread-safe via internal lock
 (sqlite3 connections are not thread-safe by default). Sync API; async
@@ -29,9 +29,9 @@ Hot-path priorities (per placeholder contract):
 - patterns_active is cacheable — caller refreshes on intel apply, not per-request
 - probes_log is fire-and-forget — caller schedules via to_thread
 
-Backend choice fixed for v0.1: sqlite3 (stdlib). Postgres / redis adapters
-are a v0.2 concern — preserve this Storage class's interface and a swap
-is mechanical.
+Backend choice is sqlite3 (stdlib) in the standalone build. Postgres / redis
+adapters remain a later-release concern; preserve this Storage class's
+interface and a swap is mechanical.
 """
 from __future__ import annotations
 
@@ -161,6 +161,7 @@ CREATE INDEX IF NOT EXISTS idx_alerts_kind_source ON alerts(kind, source_id);
 
 _MIGRATIONS: list[tuple[int, str]] = [
     (0, _BASE_SCHEMA),
+    (1, "ALTER TABLE patterns ADD COLUMN header_name TEXT;"),
 ]
 
 
@@ -250,6 +251,10 @@ class Storage:
         return [_row_to_pattern(r) for r in rows]
 
     def patterns_upsert(self, pattern: Pattern) -> None:
+        # Regex policy guard runs before commit. Catastrophic-backtracking
+        # patterns are rejected here, never reach the live classifier.
+        from netward.regex_policy import validate_pattern_signature
+        validate_pattern_signature(pattern.get("signature", ""))
         cols, vals = _pattern_columns(pattern)
         placeholders = ",".join(["?"] * len(cols))
         update_clause = ",".join(f"{c}=excluded.{c}" for c in cols if c != "id")
@@ -389,7 +394,7 @@ def _pattern_columns(p: Pattern) -> tuple[list[str], list[Any]]:
             "id", "kind", "signature", "description", "severity", "origin",
             "origin_node_id", "created_at", "last_matched", "match_count",
             "mirror_response_id", "confidence", "parent_pattern_id",
-            "mutation_generation", "expires_at",
+            "mutation_generation", "expires_at", "header_name",
         ],
         [
             p["id"], p["kind"], p["signature"], p.get("description"),
@@ -398,7 +403,7 @@ def _pattern_columns(p: Pattern) -> tuple[list[str], list[Any]]:
             int(p.get("match_count", 0)), p.get("mirror_response_id"),
             float(p.get("confidence", 0.5)), p.get("parent_pattern_id"),
             int(p.get("mutation_generation", 0)),
-            p.get("expires_at"),
+            p.get("expires_at"), p.get("header_name"),
         ],
     )
 
@@ -420,6 +425,7 @@ def _row_to_pattern(row: sqlite3.Row) -> Pattern:
         "parent_pattern_id": row["parent_pattern_id"],
         "mutation_generation": int(row["mutation_generation"]),
         "expires_at": row["expires_at"],
+        "header_name": row["header_name"] if "header_name" in row.keys() else None,
     }
     return out
 

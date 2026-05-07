@@ -12,7 +12,7 @@ import argparse
 import asyncio
 import sys
 
-from netward.operator_layer import load_config
+from netward.operator_layer import load_config, validate_storage_permissions
 from netward.capture import start_capture_loop
 
 
@@ -28,10 +28,19 @@ def main() -> None:
         metavar="PATH",
         help="Operator config JSON (see example_config.json for a template)",
     )
+    parser.add_argument(
+        "--allow-permissive-db",
+        action="store_true",
+        help="Allow startup even when the Net Ward DB path is world-writable.",
+    )
     args = parser.parse_args()
 
     try:
         config = load_config(args.config)
+        validate_storage_permissions(
+            config,
+            allow_permissive_db=args.allow_permissive_db,
+        )
     except Exception as exc:
         print(f"Config error: {exc}", file=sys.stderr)
         sys.exit(1)

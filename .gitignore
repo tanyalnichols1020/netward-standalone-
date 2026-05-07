@@ -20,3 +20,16 @@ venv/
 env/
 
 netward.log
+
+# Internal red-team artifacts (not for public release)
+LAUNCH_HOLD_*.md
+V0_4_1_*.md
+RED_TEAM_*.md
+tools/red_team/results*/
+.redteam_pids.tmp
+
+# Local sandbox/test scratch
+.codex-pytest*/
+.pytest_tmp*/
+.tmp-pip*/
+.tmp-pip-verify*/

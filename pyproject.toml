@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "netward"
-version = "0.4.0"
+version = "0.4.1"
 description = "Passive deception layer for HTTP/network services"
 readme = "README.md"
 license = { file = "LICENSE" }

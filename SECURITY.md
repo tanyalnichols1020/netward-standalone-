@@ -20,6 +20,21 @@ Until Net Ward reaches 1.0, only the latest 0.x release line receives
 security fixes. Operators on older 0.x versions should upgrade to the
 current alpha to receive patches.
 
+## Pre-Launch Security Review
+
+Net Ward v0.4.1 underwent an internal pre-launch security review before
+release. The review covered network-visible fingerprinting, detection
+logic, install and upgrade paths, supply-chain exposure, and runtime
+resource behavior under sustained load.
+
+The review identified three critical findings before launch. All three
+were closed in v0.4.1 before release. See the `[0.4.1]` section of
+`CHANGELOG.md` for the specific patches and known limitations that remain
+for operators to consider.
+
+Operators who discover new security issues should follow the private
+reporting process below rather than opening a public issue.
+
 ## Reporting a Vulnerability
 
 **Do not file a public GitHub issue for a security report.** Public

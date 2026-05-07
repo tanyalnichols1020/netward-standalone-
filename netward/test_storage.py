@@ -1,5 +1,5 @@
 """
-Tests for netward.storage — sqlite3 backend, v0.1 bones.
+Tests for netward.storage — sqlite3 backend for the standalone build.
 
 Coverage:
 - Schema migration creates tables and records version

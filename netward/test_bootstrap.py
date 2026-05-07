@@ -121,4 +121,20 @@ def test_real_vendor_json_installs_cleanly(storage):
     assert pats > 0
     assert mirrors > 0
     active = storage.patterns_active()
-    assert len(active) == pats
+    assert len(active) > 0
+    # basic_auth_probe ships with expires_at=1 (disabled by default); active < pats is expected
+    assert len(active) <= pats
+
+
+def test_basic_auth_probe_is_seeded_but_disabled_by_default(storage):
+    """basic_auth_probe ships disabled to avoid trapping legitimate Basic Auth users.
+    It must be in the DB (so enable-pattern works) but absent from patterns_active()."""
+    mod.install_vendor_patterns(storage)
+    active_ids = {p["id"] for p in storage.patterns_active()}
+    assert "basic_auth_probe" not in active_ids
+
+    row = storage._conn.execute(
+        "SELECT expires_at FROM patterns WHERE id = ?", ("basic_auth_probe",)
+    ).fetchone()
+    assert row is not None, "basic_auth_probe must be seeded into storage"
+    assert row["expires_at"] == pytest.approx(1.0)

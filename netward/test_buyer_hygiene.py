@@ -138,7 +138,7 @@ def test_no_team_names_in_production(py_file):
 
 
 _PRINT_OK_FILES = frozenset({
-    "operator_layer.py",  # v0.1 alert delivery to stdout (documented)
+    "operator_layer.py",  # standalone alert delivery to stdout (documented)
     "cli.py",             # CLI tool: stdout is the user interface contract
     "__main__.py",        # entrypoint: print() before logger is configured for fatal errors
 })

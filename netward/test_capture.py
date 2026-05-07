@@ -131,19 +131,21 @@ async def _make_client(config: OperatorConfig, storage) -> tuple[TestClient, aio
 async def test_legit_request_forwarded_upstream(mock_storage):
     """
     No patterns, no flood -> classification=unknown -> forwards to upstream.
-    Upstream is unreachable so we get 502, confirming Net Ward tried to
-    forward rather than mirror.
+    If the upstream is unreachable, Net Ward falls back to the default mirror
+    (one of five response-shape variants) rather than a raw 502.
     """
     client, session = await _make_client(_config(upstream="http://127.0.0.1:59997"), mock_storage)
     try:
         resp = await client.get("/api/v1/status")
-        assert resp.status == 502  # upstream unreachable = forward attempted
+        # Default mirror variants: 200 (json ok), 429 (rate limited), 503 (html),
+        # 200 (empty json), 200 (plain). Any is valid; 502 is the failure mode.
+        assert resp.status in {200, 429, 503}
         await asyncio.sleep(0.05)  # let fire-and-forget probe log flush
         assert len(mock_storage.probes) > 0
         logged = mock_storage.probes[-1]
         assert logged["classification"] == "unknown"
-        assert logged["upstream_passed"] is True
-        assert logged["mirror_fired"] is False
+        assert logged["upstream_passed"] is False
+        assert logged["mirror_fired"] is True
     finally:
         await client.close()
         await session.close()
@@ -172,10 +174,11 @@ async def test_probe_match_fires_mirror(mock_storage, stub_mirror):
 
 
 @pytest.mark.asyncio
-async def test_flood_fires_mirror(mock_storage, stub_mirror):
+async def test_flood_with_probe_path_fires_mirror(mock_storage, stub_mirror):
     """
-    Source with 30 timestamps in rate window gets flood classification + mirror.
-    Rate window is pre-seeded so the very next request tips into flood.
+    Source in flood state (1000 hits in window) hitting a probe-shaped path
+    still receives a mirror response (B1 semantics: pattern match drives mirror,
+    flood state labels classification but does not change routing).
     """
     now = time.time()
     source_id = "flood-test-source"
@@ -189,13 +192,16 @@ async def test_flood_fires_mirror(mock_storage, stub_mirror):
         "legit_count": 0,
         "notes": [],
     }
-    # 30 timestamps within the last 0.5 s -> just at FLOOD_THRESHOLD
-    cap_mod._rate_windows[source_id] = deque([now - 0.1] * 30, maxlen=500)
+    mock_storage.patterns = [_wp_admin_pattern()]
+    # 1000 timestamps within the last 0.5 s -> just at FLOOD_THRESHOLD (1000/10s)
+    cap_mod._rate_windows[source_id] = deque([now - 0.1] * 1000, maxlen=2000)
 
     client, session = await _make_client(_config(), mock_storage)
     try:
-        resp = await client.get("/normal-page")
-        assert resp.status == 200
+        resp = await client.get("/wp-admin/")   # probe-shaped path → pattern match
+        assert resp.status == 200               # stub_mirror always returns 200
+        body = await resp.text()
+        assert "mirrored" in body
         await asyncio.sleep(0.05)
         assert len(mock_storage.probes) > 0
         logged = mock_storage.probes[-1]
@@ -207,21 +213,58 @@ async def test_flood_fires_mirror(mock_storage, stub_mirror):
 
 
 @pytest.mark.asyncio
+async def test_flood_without_probe_path_passes_through(mock_storage):
+    """
+    Source in flood state hitting a non-probe path still reaches upstream (B1).
+    Upstream unavailable here → default mirror fallback, but classification is
+    still 'flood' and the probe log shows the pass-through attempt.
+    """
+    now = time.time()
+    source_id = "flood-test-source"
+    mock_storage.sources["127.0.0.1"] = {
+        "id": source_id,
+        "ip_address": "127.0.0.1",
+        "reputation": "neutral",
+        "first_seen": now,
+        "last_seen": now,
+        "probe_count": 0,
+        "legit_count": 0,
+        "notes": [],
+    }
+    # No patterns installed — any path will pass through (or fall to mirror if upstream down)
+    cap_mod._rate_windows[source_id] = deque([now - 0.1] * 1000, maxlen=2000)
+
+    client, session = await _make_client(_config(upstream="http://127.0.0.1:59995"), mock_storage)
+    try:
+        resp = await client.get("/api/health")
+        assert resp.status in {200, 429, 503}  # upstream down → default mirror variant
+        await asyncio.sleep(0.05)
+        assert len(mock_storage.probes) > 0
+        logged = mock_storage.probes[-1]
+        assert logged["classification"] == "flood"
+    finally:
+        await client.close()
+        await session.close()
+
+
+@pytest.mark.asyncio
 async def test_no_match_routes_upstream(mock_storage):
     """
-    Pattern installed but path doesn't match -> unknown -> upstream (502).
-    Confirms Net Ward forwarded rather than mirrored.
+    Pattern installed but path doesn't match -> unknown -> upstream.
+    If upstream is unavailable, Net Ward falls back to one of the default mirror
+    variants rather than a raw 502.
     """
     mock_storage.patterns = [_wp_admin_pattern()]
     client, session = await _make_client(_config(upstream="http://127.0.0.1:59996"), mock_storage)
     try:
         resp = await client.get("/totally/legitimate/endpoint")
-        assert resp.status == 502  # forwarded, upstream unreachable
+        assert resp.status in {200, 429, 503}  # default mirror variant (not a raw 502)
         await asyncio.sleep(0.05)
         assert len(mock_storage.probes) > 0
         logged = mock_storage.probes[-1]
         assert logged["classification"] == "unknown"
-        assert logged["mirror_fired"] is False
+        assert logged["mirror_fired"] is True
+        assert logged["upstream_passed"] is False
     finally:
         await client.close()
         await session.close()

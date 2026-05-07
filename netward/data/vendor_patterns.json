@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "description": "Net Ward vendor pattern set v0.2 — default deception layer shipped with the package. Patterns are origin='vendor'; operators can disable individually via CLI.",
+  "description": "Net Ward vendor pattern set v0.4.1 — default deception layer shipped with the package. Patterns are origin='vendor'; operators can disable individually via CLI.",
   "mirror_responses": [
     {
       "id": "env_fake_blank",
@@ -167,11 +167,10 @@
       "http_status": 401,
       "headers": {
         "Content-Type": "text/plain; charset=utf-8",
-        "WWW-Authenticate": "Basic realm=\"Net Ward Maintenance {{realm_id}}\""
+        "WWW-Authenticate": "Basic realm=\"Restricted\""
       },
       "body_template": "Authentication required. Request {{request_id}} logged at {{timestamp}}.\n",
       "body_template_vars": {
-        "realm_id": "fake_id",
         "request_id": "uuid",
         "timestamp": "timestamp"
       },
@@ -183,7 +182,7 @@
     {
       "id": "env_file_probe",
       "kind": "path",
-      "signature": "^/(\\.env|app/\\.env|config/\\.env)(\\.|$)",
+      "signature": "^/(?:[^/?#]+/)*\\.env(?:rc|(?:[._][^/?#]+)|\\.[^/?#]+)?(?:\\?.*)?$",
       "description": "Environment file fishing — .env exposure attempt",
       "severity": "warn",
       "origin": "vendor",
@@ -234,7 +233,7 @@
     {
       "id": "shell_uploader_probe",
       "kind": "path",
-      "signature": "^/(shell|c99|c100|r57|webshell|wso|alfa|b374k|by\\.php|cmd|backdoor)\\.php$",
+      "signature": "^/(shell|c99|c100|r57|webshell|wso|alfa|b374k|by|cmd|backdoor)\\.php$",
       "description": "PHP shell uploader probe (c99/r57/wso/alfa family)",
       "severity": "critical",
       "origin": "vendor",
@@ -251,7 +250,8 @@
     {
       "id": "scanner_ua_probe",
       "kind": "header",
-      "signature": "(?i)\\b(sqlmap|nikto|nuclei|masscan|zgrab|gobuster|dirbuster|wfuzz|wpscan|hydra|nmap)\\b",
+      "signature": "(?i)\\b(sqlmap|nikto|nuclei|masscan|zgrab|gobuster|dirbuster|wfuzz|wpscan|hydra|nmap|feroxbuster|ffuf|dirb|burpsuite|burp|metasploit|zap)\\b",
+      "header_name": "User-Agent",
       "description": "Known scanner User-Agent fingerprint",
       "severity": "warn",
       "origin": "vendor",
@@ -354,7 +354,8 @@
       "id": "basic_auth_probe",
       "kind": "header",
       "signature": "(?i)^Basic\\s+[A-Za-z0-9+/=]{8,}$",
-      "description": "Basic authorization brute-force probe",
+      "header_name": "Authorization",
+      "description": "Basic authorization brute-force probe — disabled by default; enable only when your upstream does not use HTTP Basic Auth",
       "severity": "warn",
       "origin": "vendor",
       "origin_node_id": null,
@@ -365,7 +366,7 @@
       "confidence": 0.85,
       "parent_pattern_id": null,
       "mutation_generation": 0,
-      "expires_at": null
+      "expires_at": 1
     }
   ]
 }

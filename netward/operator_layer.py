@@ -41,6 +41,7 @@ for operators with their own incident management.
 from __future__ import annotations
 
 import json
+import stat
 import sys
 from pathlib import Path
 from typing import Optional
@@ -63,14 +64,15 @@ class ValidationError(ValueError):
 def load_config(path: str) -> OperatorConfig:
     """Read and validate an operator config file.
 
-    v0.1 intentionally supports JSON only so the package stays stdlib-only.
-    YAML gets a precise deferred error instead of a surprise dependency.
+    The standalone build intentionally supports JSON only so the package stays
+    stdlib-only. YAML gets a precise deferred error instead of a surprise
+    dependency.
     """
     config_path = Path(path)
     if config_path.suffix.lower() in {".yaml", ".yml"}:
-        raise NotImplementedError("YAML config loading deferred to v0.2; use JSON")
+        raise NotImplementedError("YAML config loading deferred to a later release; use JSON")
     if config_path.suffix.lower() != ".json":
-        raise ValidationError("config file must be JSON for v0.1")
+        raise ValidationError("config file must be JSON for the standalone release")
 
     try:
         raw = json.loads(config_path.read_text(encoding="utf-8"))
@@ -86,8 +88,44 @@ def load_config(path: str) -> OperatorConfig:
     return raw
 
 
+def validate_storage_permissions(
+    config: OperatorConfig,
+    *,
+    allow_permissive_db: bool = False,
+    platform_name: Optional[str] = None,
+) -> None:
+    """Validate storage_path permissions before the listener binds.
+
+    POSIX builds refuse to start on world-writable DB paths unless the operator
+    explicitly overrides the check. Windows emits an informational skip because
+    POSIX mode bits are not a reliable permission signal there.
+    """
+    platform_name = (platform_name or sys.platform).lower()
+    if platform_name.startswith("win"):
+        print(
+            "INFO: storage permission check skipped on Windows; avoid shared-write "
+            "locations for the Net Ward database.",
+            file=sys.stderr,
+        )
+        return
+
+    target = _storage_permission_target(config.get("storage_path"))
+    if not _is_world_writable(target):
+        return
+
+    message = (
+        "ERROR: storage path permissions are too permissive: "
+        f"{target} is world-writable. Fix the path or start with "
+        "--allow-permissive-db."
+    )
+    if allow_permissive_db:
+        print(f"{message} Proceeding because --allow-permissive-db was set.", file=sys.stderr)
+        return
+    raise ValidationError(message)
+
+
 def deliver_alert(alert: OperatorAlert, config: OperatorConfig) -> list[str]:
-    """Deliver an alert through v0.1 channels.
+    """Deliver an alert through the current standalone alert surface.
 
     Logging to stdout is the only implemented channel. Explicit external
     channels are rejected so operators do not assume paging is active.
@@ -95,7 +133,7 @@ def deliver_alert(alert: OperatorAlert, config: OperatorConfig) -> list[str]:
     channels = _normalized_alert_channels(config)
     if channels:
         deferred = ", ".join(channels)
-        raise NotImplementedError(f"alert channels deferred to v0.2: {deferred}")
+        raise NotImplementedError(f"alert channels deferred to a later release: {deferred}")
 
     print(_format_alert(alert), file=sys.stdout)
     return ["stdout"]
@@ -149,6 +187,17 @@ def _normalized_alert_channels(config: dict) -> list[str]:
     if not isinstance(channels, list):
         raise ValidationError("alert_channels must be a list")
     return channels
+
+
+def _storage_permission_target(storage_path: Optional[str]) -> Path:
+    path = Path(storage_path or "netward.db")
+    if path.exists():
+        return path
+    return path.parent if str(path.parent) else Path(".")
+
+
+def _is_world_writable(path: Path) -> bool:
+    return bool(path.stat().st_mode & stat.S_IWOTH)
 
 
 def _format_alert(alert: OperatorAlert) -> str:

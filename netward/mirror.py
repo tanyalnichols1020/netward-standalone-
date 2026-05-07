@@ -100,16 +100,26 @@ def fire_mirror(probe: Probe, response: MirrorResponse) -> dict:
         name: _generate_value(kind, probe)
         for name, kind in response.get("body_template_vars", {}).items()
     }
-    body_template = response.get("body_template", "")
-    body = _PLACEHOLDER_RE.sub(
-        lambda match: rendered_vars.get(match.group(1), match.group(0)),
-        body_template,
-    )
+
+    def _render(template: str) -> str:
+        return _PLACEHOLDER_RE.sub(
+            lambda m: rendered_vars.get(m.group(1), m.group(0)),
+            template,
+        )
+
+    # X1: apply substitution to both body and header values
+    body = _render(response.get("body_template", ""))
     _assert_safe_body(body)
+
+    rendered_headers = {k: _render(v) for k, v in response.get("headers", {}).items()}
+
+    # X2: inject a plausible Server header if the mirror doesn't supply one
+    if not any(k.lower() == "server" for k in rendered_headers):
+        rendered_headers["Server"] = "nginx"
 
     return {
         "status": int(response.get("http_status", 200)),
-        "headers": dict(response.get("headers", {})),
+        "headers": rendered_headers,
         "body": body,
     }
 

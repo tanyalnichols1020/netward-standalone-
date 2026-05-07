@@ -5,8 +5,8 @@
   "_comment_upstream_target": "HTTP origin service protected by Net Ward.",
   "upstream_target": "http://127.0.0.1:9000",
 
-  "_comment_listen_address": "Host and port where Net Ward accepts inbound HTTP traffic.",
-  "listen_address": "0.0.0.0:8080",
+  "_comment_listen_address": "Host and port where Net Ward accepts inbound HTTP traffic. Default is localhost-only; set to 0.0.0.0:<port> only when you intend to expose Net Ward to your LAN/internet.",
+  "listen_address": "127.0.0.1:8080",
 
   "_comment_storage_path": "SQLite database path for sources, patterns, probes, and alerts.",
   "storage_path": "netward.db",
@@ -14,7 +14,7 @@
   "_comment_mirror_intensity_default": "Default mirror level when a pattern does not specify one.",
   "mirror_intensity_default": "moderate",
 
-  "_comment_mesh_enabled": "Mesh sharing is reserved for a later release; keep false for v0.3.",
+  "_comment_mesh_enabled": "Mesh sharing is reserved for a later release; keep false for v0.4.1.",
   "mesh_enabled": false,
 
   "_comment_mesh_endpoint": "Reserved mesh endpoint URL. Leave null while mesh_enabled is false.",
@@ -23,7 +23,7 @@
   "_comment_trust_manifest_url": "Reserved trust manifest URL for mesh deployments. Leave null for standalone mode.",
   "trust_manifest_url": null,
 
-  "_comment_alert_channels": "v0.3 logs alerts to stdout. External channels are reserved for a later release.",
+  "_comment_alert_channels": "v0.4.1 logs alerts to stdout. External channels are reserved for a later release.",
   "alert_channels": [],
 
   "_comment_alert_email": "Reserved email destination for later alert delivery.",
