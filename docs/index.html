@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Net Ward is a user-space reverse proxy that deters bots with safe deception responses.">
+  <title>Net Ward | User-space bot and DDoS deflection</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="#top" aria-label="Net Ward home">
+      <span class="brand-mark" aria-hidden="true">NW</span>
+      <span>Net Ward</span>
+    </a>
+    <nav class="nav-links" aria-label="Primary">
+      <a href="#how">How it works</a>
+      <a href="#proof">Proof</a>
+      <a href="#limits">Limits</a>
+      <a href="https://github.com/sponsors/tanyalnichols1020" target="_blank" rel="noreferrer">Sponsor</a>
+      <a class="nav-cta" href="https://github.com/tanyalnichols1020/netward-standalone-" target="_blank" rel="noreferrer">GitHub</a>
+    </nav>
+  </header>
+
+  <main id="top">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="eyebrow">Open-source alpha - v0.4.1</p>
+        <h1 id="hero-title">Net Ward</h1>
+        <p class="hero-subtitle">Always-on bot deflection for small HTTP services.</p>
+        <p class="hero-text">
+          Put a local reverse proxy in front of your app. Clean traffic passes through.
+          Known probes and low-end abuse get harmless mirror responses that waste bot effort
+          without a cloud account, kernel hooks, or retaliation.
+        </p>
+        <div class="hero-actions">
+          <a class="button primary" href="https://github.com/tanyalnichols1020/netward-standalone-" target="_blank" rel="noreferrer">View on GitHub</a>
+          <a class="button secondary" href="#quickstart">Install locally</a>
+          <a class="button ghost" href="https://github.com/sponsors/tanyalnichols1020" target="_blank" rel="noreferrer">Sponsor development</a>
+        </div>
+        <div class="promise-row" aria-label="Key promises">
+          <span>Always on</span>
+          <span>Deception, not damage control</span>
+          <span>Pip install, no AWS required</span>
+        </div>
+      </div>
+
+      <div class="hero-visual" aria-hidden="true">
+        <div class="traffic-map">
+          <div class="lane lane-clean">
+            <span class="packet packet-a"></span>
+            <span class="packet packet-b"></span>
+            <span class="packet packet-c"></span>
+            <strong>clean traffic</strong>
+          </div>
+          <div class="ward-node">
+            <span class="node-ring"></span>
+            <span class="node-core">NW</span>
+          </div>
+          <div class="lane lane-mirror">
+            <span class="packet packet-d"></span>
+            <span class="packet packet-e"></span>
+            <strong>known abuse</strong>
+          </div>
+          <div class="destination destination-upstream">upstream</div>
+          <div class="destination destination-mirror">mirror</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="impact-band" aria-label="Positioning">
+      <p>
+        Small services get scraped, scanned, and shoved around before they have a security team.
+        Net Ward gives them a local buffer that behaves like infrastructure, not theater.
+      </p>
+    </section>
+
+    <section class="section split" id="how">
+      <div>
+        <p class="section-kicker">Operating model</p>
+        <h2>Always on, fail open, no retaliation.</h2>
+        <p>
+          Net Ward is built for teams that need a practical buffer in front of a small service.
+          It is not a cloud WAF and it is not a hostile countermeasure. It is a local reverse
+          proxy that classifies request shape and routes known abuse into safe, plausible mirrors.
+        </p>
+      </div>
+      <div class="flow-panel" aria-label="Request flow">
+        <div class="flow-row">
+          <span class="flow-dot good"></span>
+          <div>
+            <strong>Clean request</strong>
+            <p>Forwarded to the upstream service.</p>
+          </div>
+        </div>
+        <div class="flow-row">
+          <span class="flow-dot watch"></span>
+          <div>
+            <strong>Known probe</strong>
+            <p>Matched against bundled or operator patterns.</p>
+          </div>
+        </div>
+        <div class="flow-row">
+          <span class="flow-dot mirror"></span>
+          <div>
+            <strong>Mirror response</strong>
+            <p>Returns harmless fake pages, redirects, or status shapes.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section feature-grid" aria-label="Core features">
+      <article>
+        <h3>User-space deployment</h3>
+        <p>No kernel hooks, packet tampering, or special cloud account required. Run it in front of an HTTP service.</p>
+      </article>
+      <article>
+        <h3>Safe deception</h3>
+        <p>Mirror responses are normal HTTP responses. No malware, no retaliation, no collection of submitted secrets.</p>
+      </article>
+      <article>
+        <h3>Operator patterns</h3>
+        <p>Ship with bundled probe patterns, disable collisions, and add local patterns with insertion-time validation.</p>
+      </article>
+      <article>
+        <h3>Load visibility</h3>
+        <p>Includes an operator load generator to measure latency, error rates, and process resource behavior.</p>
+      </article>
+    </section>
+
+    <section class="section quickstart" id="quickstart">
+      <div>
+        <p class="section-kicker">Quick start</p>
+        <h2>Run it from a checkout.</h2>
+        <p>Point `upstream_target` at the service you want to protect, then put Net Ward in front of it.</p>
+      </div>
+      <pre><code>pip install -e .
+python -m netward --config example_config.json</code></pre>
+    </section>
+
+    <section class="section split reverse" id="proof">
+      <div>
+        <p class="section-kicker">Release posture</p>
+        <h2>Security-reviewed before public release.</h2>
+        <p>
+          The v0.4.1 release followed an internal pre-launch security review covering
+          network fingerprinting, detection logic, install path, supply chain, and runtime
+          resource behavior. Three critical findings were identified and closed before release.
+        </p>
+      </div>
+      <div class="audit-list" aria-label="Review scope">
+        <span>Fingerprinting pass</span>
+        <span>Detection logic review</span>
+        <span>Install path cleanup</span>
+        <span>Supply-chain sweep</span>
+        <span>Runtime load gate</span>
+      </div>
+    </section>
+
+    <section class="section limits" id="limits">
+      <div class="limits-copy">
+        <p class="section-kicker">Known limits</p>
+        <h2>Honest about the edges.</h2>
+        <p>
+          Net Ward is an alpha. The changelog documents the boundaries operators need to plan around:
+          regex policy is best-effort static analysis in v0.4.1, reverse-proxy source awareness is deferred,
+          Windows DB ACL enforcement is deferred, and coordinated low-rate multi-source floods are v0.5 work.
+        </p>
+      </div>
+      <a class="button secondary" href="https://github.com/tanyalnichols1020/netward-standalone-/blob/main/CHANGELOG.md" target="_blank" rel="noreferrer">Read the changelog</a>
+    </section>
+
+    <section class="section support" aria-labelledby="support-title">
+      <div>
+        <p class="section-kicker">Support the work</p>
+        <h2 id="support-title">Help keep small-service defense practical.</h2>
+        <p>
+          Net Ward is open-source alpha software. Sponsorship helps fund testing, documentation,
+          and the v0.5 work already called out in the changelog.
+        </p>
+      </div>
+      <a class="button primary" href="https://github.com/sponsors/tanyalnichols1020" target="_blank" rel="noreferrer">Sponsor on GitHub</a>
+    </section>
+
+    <section class="section faq" aria-label="Frequently asked questions">
+      <h2>Questions operators ask first.</h2>
+      <details>
+        <summary>Is Net Ward a WAF?</summary>
+        <p>No. It is a small reverse-proxy deception layer. It does not replace application security or a full edge stack.</p>
+      </details>
+      <details>
+        <summary>Does it attack bots back?</summary>
+        <p>No. Net Ward returns harmless HTTP responses. The mirror layer is meant to deflect automated abuse, not retaliate.</p>
+      </details>
+      <details>
+        <summary>What happens if Net Ward fails?</summary>
+        <p>The design goal is fail open: classification, storage, or mirror failures should pass traffic to upstream.</p>
+      </details>
+      <details>
+        <summary>Who is it for right now?</summary>
+        <p>Small teams running HTTP services that want a practical, local deflection layer and are comfortable operating alpha software.</p>
+      </details>
+    </section>
+
+    <section class="final-cta">
+      <p class="section-kicker">Ready to inspect it?</p>
+      <h2>Start with the code.</h2>
+      <a class="button primary" href="https://github.com/tanyalnichols1020/netward-standalone-" target="_blank" rel="noreferrer">Open the repository</a>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <span>Net Ward v0.4.1</span>
+    <span>Apache 2.0</span>
+    <a href="https://github.com/sponsors/tanyalnichols1020" target="_blank" rel="noreferrer">Sponsor</a>
+    <a href="https://github.com/tanyalnichols1020/netward-standalone-" target="_blank" rel="noreferrer">GitHub</a>
+  </footer>
+</body>
+</html>
