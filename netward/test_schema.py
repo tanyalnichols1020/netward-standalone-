@@ -107,7 +107,7 @@ class TestSerializationRoundTrip:
         intel: schema.MeshIntel = {
             "id": "intel-uuid-1",
             "kind": "new_pattern",
-            "origin_node_id": "node-uuid-tanya-hub",
+            "origin_node_id": "node-uuid-local-hub",
             "payload": {"pattern_id": "pat-uuid-99",
                         "kind": "path",
                         "signature": r"^/.env"},

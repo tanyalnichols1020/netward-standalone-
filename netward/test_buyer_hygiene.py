@@ -42,10 +42,10 @@ TEST_PY = [p for p in _ALL_PY if p.name.startswith("test_") and p.name != _HYGIE
 
 # Paths that pin to a developer's local machine
 PERSONAL_PATH_FRAGMENTS = (
-    r"c:\users\tanya",
-    r"\users\tanya",
-    r"/users/tanya",
-    r"/home/tanya",
+    r"c:\users\local-user",
+    r"\users\local-user",
+    r"/users/local-user",
+    r"/home/local-user",
 )
 
 # Sister-product references that should not appear in Net Ward source
@@ -71,7 +71,7 @@ DE_INTEL_HEXES = (
 # Team / persona names that belong in NOTICE attribution (if anywhere),
 # not in narrative comments or docstrings throughout production source.
 TEAM_NAMES = (
-    "Tanya",
+    "LocalUser",
     "Rocky",
     "Goldwing",
     "Fidget",
